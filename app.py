@@ -12,7 +12,7 @@ from config import (
     TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_NUMBER,
     CS_RECIPIENTS, AGENT_NUMBERS,
     SOP_DOC_URL, WARRANTY_CSV_URL,  
-    RAG_DIR, SOP_JSON_PATH, ADMIN_TOKEN
+    RAG_DIR, SOP_JSON_PATH, ADMIN_TOKEN, SUPPORT_URL
 )
 
 from lang_detect import is_malay
@@ -25,7 +25,7 @@ from google_sheets import (
 )
 from twilio.rest import Client as TwilioClient
 
- # logger
+# logger
 from qna_logger import log_qna
 
 # ----------------- Logging -----------------
@@ -213,16 +213,19 @@ def run_rag(user_text: str, lang_hint: str = "EN", intent_hint: str | None = Non
             return fixed
         return out
 
-    #  fallback from SOP block
+    # ---- fallback from SOP block (no LLM answer): point to FAQ
     top = context.split("\n\n---\n\n")[0].strip() if context else ""
     a_text = ""
     for line in top.splitlines():
         if line.lstrip().lower().startswith("a:"):
             a_text = line.split(":", 1)[1].strip()
-    common_links = "Useful links: https://kommu.ai/products/  https://kommu.ai/support/  https://kommu.ai/faq/"
+
+    faq_line_en = f"For more info, please see our FAQ: {SUPPORT_URL}"
+    faq_line_bm = f"Untuk maklumat lanjut, sila rujuk Soalan Lazim kami: {SUPPORT_URL}"
+
     if lang_hint == "BM":
-        return ("Baik, ini yang berkaitan:\n- " + (a_text or "Rujukan SOP ditemui.") + "\n\n" + common_links).strip()
-    return ("Here’s the relevant summary:\n- " + (a_text or "I found a related SOP entry.") + "\n\n" + common_links).strip()
+        return ("Baik, ini yang berkaitan:\n- " + (a_text or "Rujukan SOP ditemui.") + "\n\n" + faq_line_bm).strip()
+    return ("Here’s the relevant summary:\n- " + (a_text or "I found a related SOP entry.") + "\n\n" + faq_line_en).strip()
 
 # ----------------- Session State -----------------
 REPLY_STATE = defaultdict(lambda: {"count": 0, "offered": False, "offers_count": 0, "last_offer_at": None, "fail_count": 0})
@@ -232,16 +235,23 @@ LA_COOLDOWN_HOURS = 24
 PENDING = defaultdict(lambda: {"expect": None, "tries": 0})  # e.g., waiting for dongle
 
 def track_and_maybe_offer(wa_from: str, msg: str, lang: str, was_greeting: bool = False) -> str:
+    """
+    Append LA offer footer *only after* the user has reached 3 messages
+    in the current session (and respect a 24h cooldown).
+    """
     st = REPLY_STATE[wa_from]
     if not was_greeting:
         st["count"] += 1
+
     def can_offer():
         if st["offered"]:
             return False
         if st["last_offer_at"] is None:
             return True
         return (datetime.now() - st["last_offer_at"]) >= timedelta(hours=LA_COOLDOWN_HOURS)
-    should = (st["fail_count"] >= 2 or st["count"] >= 2) and can_offer()
+
+    # STRICT rule: show LA only after 3+ user messages (no fail-count shortcut)
+    should = (st["count"] >= 3) and can_offer()
     if should:
         st["offered"] = True
         st["offers_count"] += 1
@@ -384,7 +394,7 @@ async def webhook(request: Request):
 
         lower = norm(body)
 
-        
+        # language commands
         lang_cmd_reply = try_language_command(wa_from, lower)
         if lang_cmd_reply:
             return _log_and_twiml(wa_from, body, lang_cmd_reply, "EN", "lang_cmd", False, False)
@@ -412,11 +422,11 @@ async def webhook(request: Request):
                       "Ejen akan menghubungi anda sekejap lagi. (Taip SAMBUNG untuk teruskan dengan bot.)")
             return _log_and_twiml(wa_from, body, answer, lang, "frozen_ack", aft, True)
 
-        # greeting
+        # greeting (NO LA mention here)
         if has_any(["hi","hello","start","mula","hai","helo","menu"], lower):
-            msg = ("Hai! Saya Kai - Chatbot Kommu\nPerlu ejen manusia? Taip LA"
+            msg = ("Hai! Saya Kai - Chatbot Kommu"
                    if lang=="BM" else
-                   "Hi ! i'm Kai - Kommu Chatbot\nNeed a live agent ? Type LA")
+                   "Hi! I'm Kai — Kommu Chatbot")
             if aft: msg += after_hours_suffix(lang)
             msg = track_and_maybe_offer(wa_from, msg, lang, was_greeting=True)
             return _log_and_twiml(wa_from, body, msg, lang, "greeting", aft, False)
@@ -516,12 +526,15 @@ async def webhook(request: Request):
             answer = track_and_maybe_offer(wa_from, answer, lang)
             return _log_and_twiml(wa_from, body, answer, lang, "default", aft, False)
 
-        # hard fallback
-        msg = ("Saya boleh bantu harga, pemasangan, waktu pejabat, penggantian bahagian, waranti dan pandu uji. "
-               "Cuba: 'Beli Kommu', 'Apa itu Kommu', 'Bagaimana ia berfungsi', 'Waktu pejabat', 'Pandu uji'. Perlu ejen manusia? Taip LA."
-               if lang=="BM" else
-               "I can help with price, installation, office hours, parts, warranty and test drives. "
-               "Try: 'Buy Kommu', 'What is Kommu', 'How does it work', 'Office time', 'Test drive'. Need a live agent? Type LA.")
+        # ---- hard fallback (no LA in the text; LA footer handled by track_and_maybe_offer)
+        if lang=="BM":
+            msg = ("Saya boleh bantu harga, semakan sokongan, pemasangan, waktu pejabat, penggantian bahagian dan pandu uji. "
+                   "Cuba: 'Beli Kommu', 'Apa itu Kommu', 'Bagaimana ia berfungsi', 'Waktu pejabat', 'Pandu uji'. "
+                   f"Rujukan FAQ: {SUPPORT_URL}")
+        else:
+            msg = ("I can help with price, support check, installation, office hours, part replacement, and test drives. "
+                   "Try: 'Buy Kommu', 'What is Kommu', 'How does it work', 'Office time', 'Test drive'. "
+                   f"FAQ: {SUPPORT_URL}")
         if aft: msg += after_hours_suffix(lang)
         msg = track_and_maybe_offer(wa_from, msg, lang)
         return _log_and_twiml(wa_from, body, msg, lang, "fallback", aft, False)
@@ -530,3 +543,74 @@ async def webhook(request: Request):
         log.info(f"[Kai] FATAL in webhook: {e}")
         err = "Sorry, I hit an internal error. Please try again. If urgent, type LA."
         return _log_and_twiml(wa_from, (body if 'body' in locals() else ""), err, "EN", "error", False, (wa_from in FROZEN_USERS), status="error")
+
+
+# --- Legacy constants kept for compatibility (not used directly by greeting now) ---
+EN_GREETING = ("Hi! I'm Kai — Kommu Chatbot\n")
+BM_GREETING = ("Hai! Saya Kai - Chatbot Kommu\n")
+
+def reply_about(lang="EN"):
+    if lang == "BM":
+        return ("Kommu menghasilkan KommuAssist, sistem bantuan pemanduan Tahap 2 (ADAS) untuk kereta yang serasi. "
+                "Ia menambah pengekalan lorong, kawalan jelajah adaptif (ACC) dan stop-and-go melalui perkakasan plug-and-play. "
+                "Maklumat: https://kommu.ai/  Produk: https://kommu.ai/products/  FAQ: https://kommu.ai/faq/")
+    return ("Kommu builds KommuAssist, a Level 2 driver-assistance (ADAS) upgrade for compatible cars. "
+            "It adds lane centering, adaptive cruise control (ACC) and stop-and-go via plug-and-play hardware. "
+            "Learn more: https://kommu.ai/  Product: https://kommu.ai/products/  FAQ: https://kommu.ai/faq/")
+
+def reply_how(lang="EN"):
+    if lang == "BM":
+        return ("KommuAssist berfungsi dengan perkakasan plug-and-play yang menjalankan model bantuan pemanduan "
+                "yang ditala untuk jalan raya Malaysia. Ia mengekalkan kereta di tengah lorong, mengekalkan jarak (ACC), "
+                "dan mengendalikan trafik henti-gerak. Butiran: https://kommu.ai/")
+    return ("KommuAssist works via plug-and-play hardware running a driver-assistance model tuned for Malaysian roads. "
+            "It keeps the car centered, maintains distance (ACC) and handles stop-and-go. Details: https://kommu.ai/")
+
+def reply_buy(lang="EN"):
+    if lang=="BM":
+        return ("Tempah KommuAssist 1s: https://kommu.ai/products/ "
+                "(anggaran hantar ~1 minggu; pemasangan percuma di HQ dgn janji temu). "
+                "Semak sokongan: https://kommu.ai/support/ — beritahu jenama/model/tahun/varian + ACC & LKAS.")
+    return ("Order KommuAssist 1s: https://kommu.ai/products/ "
+            "(ships ~1 week; free install at HQ by appointment). "
+            "Check support: https://kommu.ai/support/ — tell me make/model/year/trim + ACC & LKAS.")
+
+def reply_test_drive(lang="EN"):
+    link = "https://calendly.com/kommuassist/test-drive?month=2025-08"
+    if lang=="BM":
+        return f"Tempah pandu uji di sini: {link}"
+    return f"Book a test drive here: {link}"
+
+def reply_office_hours(lang="EN"):
+    if lang=="BM":
+        return ("Waktu pejabat: Isnin–Jumaat, 10:00–18:00 (MYT). "
+                "Alamat: C/105B, Block C, Jalan PJU 10/2a, Damansara Damai, 47830 Petaling Jaya, Selangor. "
+                "Waze: https://waze.com/ul?ll=3.2137,101.6056&navigate=yes")
+    return ("Office hours: Mon–Fri, 10:00–18:00 (MYT). "
+            "Address: C/105B, Block C, Jalan PJU 10/2a, Damansara Damai, 47830 Petaling Jaya, Selangor. "
+            "Waze: https://waze.com/ul?ll=3.2137,101.6056&navigate=yes")
+
+def reply_not_blinking(lang="EN"):
+    if lang=="BM":
+        return ("Semakan kuasa: 1) Ignition ON; 2) Cabut/pasang semula USB-C & relay harness; "
+                "3) Soft reboot (cabut kuasa 30s, sambung semula). "
+                "Jika masih tiada LED, hantar video/gambar + emel/telefon pesanan. "
+                f"Rujukan: Produk https://kommu.ai/products/ · FAQ {SUPPORT_URL}")
+    return ("Power checks: 1) Ignition ON; 2) Reseat USB-C & relay harness; "
+            "3) Soft reboot (unplug 30s, plug back). "
+            "If still no LED, share a short clip + order email/phone. "
+            f"Refs: Product https://kommu.ai/products/ · FAQ {SUPPORT_URL}")
+
+def reply_part_replacement(lang="EN"):
+    if lang=="BM":
+        return ("Boleh — kongsi bahagian (Vision/Relay/Harness/Kabel), penerangan isu + foto/video, "
+                "dan emel/telefon pesanan. Saya akan buka tiket; ejen manusia akan hubungi tentang harga & stok. "
+                f"FAQ: {SUPPORT_URL}")
+    return ("Sure — share the part (Vision/Relay/Harness/Cable), issue details + photo/video, "
+            "and your order email/phone. I’ll open a ticket; a human will follow up with price & stock. "
+            f"FAQ: {SUPPORT_URL}")
+
+FALLBACK_EN = ("I can help with price, support check, installation, office hours, part replacement, and test drives. "
+               "Try: 'Buy Kommu', 'What is Kommu', 'How does it work', 'Office time', 'Test drive'.")
+FALLBACK_BM = ("Saya boleh bantu harga, semakan sokongan, pemasangan, waktu pejabat, penggantian bahagian dan pandu uji. "
+               "Cuba: 'Beli Kommu', 'Apa itu Kommu', 'Bagaimana ia berfungsi', 'Waktu pejabat', 'Pandu uji'.")

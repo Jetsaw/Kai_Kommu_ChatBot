@@ -1,44 +1,66 @@
-# Python
-__pycache__/
-*.pyc
+
+*.py[cod]
 *.pyo
 *.pyd
-*.egg-info/
+*.so
+
+
 .venv/
 env/
 venv/
 
-# OS / IDE
-.DS_Store
-Thumbs.db
-.vscode/
-.idea/
 
-# Secrets
-.env
-.env.*
-
-# Build / cache / artifacts
-dist/
-build/
-*.log
-logs/
-tmp/
-.cache/
-pip-wheel-metadata/
-
-# Data & indices
-rag/faiss_index/
-data/**/raw/
-data/**/tmp/
-*.sqlite
-*.db
-
-# Notebooks outputs
 .ipynb_checkpoints/
 
-# Node (if any UI)
-node_modules/
 
-# Docker local
-*.local.yml
+*.log
+logs/
+*.tmp
+*.swp
+
+
+.DS_Store
+Thumbs.db
+
+
+*.egg-info/
+dist/
+build/
+
+
+*.faiss
+*.pkl
+*.npy
+rag/faiss_index/
+rag/*.bin
+rag/*.idx
+
+
+data/chat_logs_txt/
+data/chat_logs_jsonl/
+*.jsonl
+*.csv
+*.xlsx
+*.docx
+*.ods
+*.odt
+
+
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+pty
+pty.pub
+*.pem
+*.key
+*.crt
+
+
+*.pid
+*.sock
+
+
+project_structure.txt
+debug_check.py
+merge_sop.py
