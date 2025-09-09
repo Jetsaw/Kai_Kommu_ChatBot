@@ -64,3 +64,4 @@ pty.pub
 project_structure.txt
 debug_check.py
 merge_sop.py
+.env
