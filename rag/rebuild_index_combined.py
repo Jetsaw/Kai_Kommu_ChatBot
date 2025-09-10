@@ -6,10 +6,10 @@ from typing import List
 import numpy as np
 import faiss
 
-from fastembed import TextEmbedding  # <- FastEmbed, matches your requirements
+from fastembed import TextEmbedding  
 from config import FAISS_DIR, SOP_JSON_PATH
 
-MODEL_NAME = "BAAI/bge-m3"  # multilingual, good for English & Bahasa Melayu
+MODEL_NAME = "intfloat/multilingual-e5-base"
 
 
 def _normalize(v: np.ndarray) -> np.ndarray:
@@ -25,7 +25,7 @@ def _embed_texts(texts: List[str], model_name: str = MODEL_NAME) -> np.ndarray:
         return np.zeros((0, 384), dtype="float32")
 
     embedder = TextEmbedding(model_name=model_name)
-    # FastEmbed returns a generator of np.ndarray rows
+   
     rows = list(embedder.embed(texts))
     X = np.vstack(rows).astype("float32")
 
